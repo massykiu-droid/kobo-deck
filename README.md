@@ -1,7 +1,12 @@
 # kobo-deck
 
-Genera ogni 15 minuti un'immagine 758×1024 in scala di grigi con meteo (Open-Meteo) e produzione fotovoltaica (FusionSolar Kiosk), pubblicata su GitHub Pages come `deck.png` per essere mostrata su un Kobo Glo.
+Genera ogni 15 minuti due immagini 758×1024 in scala di grigi, pubblicate su GitHub Pages per essere mostrate su un Kobo Glo:
 
-- `render.py`: scarica i dati e disegna l'immagine
+- `deck.png`: meteo (Open-Meteo) e produzione fotovoltaica (FusionSolar Kiosk)
+- `stocks.png`: andamento dei titoli (Yahoo Finance), variazione rispetto al giorno precedente. È disegnata in orizzontale e ruotata di 90° per stare nello schermo verticale: si legge ruotando il Kobo (con `STOCKS_ROTATE=270` si ruota nel verso opposto)
+
+`api/display` indica al client trmnl-kobo quale delle due mostrare, alternandole a ogni quarto d'ora.
+
+- `render.py`: scarica i dati e disegna le immagini. L'elenco dei titoli è la lista `STOCKS` in cima alla sezione "titoli"
 - `.github/workflows/deck.yml`: esecuzione programmata e pubblicazione
 - Secret richiesto: `KIOSK_URL` (URL Kiosk FusionSolar)

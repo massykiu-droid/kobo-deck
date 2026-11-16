@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Genera l'immagine del deck Kobo: meteo (Open-Meteo) + fotovoltaico (FusionSolar Kiosk).
+"""Genera le immagini del deck Kobo: meteo (Open-Meteo) + fotovoltaico (FusionSolar Kiosk)
+in deck.png e andamento dei titoli (Yahoo Finance) in stocks.png, a rotazione in api/display.
 
 Variabili d'ambiente:
   KIOSK_URL   URL Kiosk FusionSolar (contiene ?kk=...). Tenerlo come secret.
@@ -86,6 +87,141 @@ def fetch_solar(kiosk_url):
     if not raw.get("success"):
         raise RuntimeError(f"Kiosk: failCode {raw.get('failCode')}")
     return json.loads(raw["data"].replace("&quot;", '"'))
+
+
+# ---------------------------------------------------------------- titoli
+# (nome mostrato, simbolo Yahoo Finance). Per cambiare un titolo basta modificare questa lista.
+# Amundi Nasdaq 100 e iShares S&P 500 IT sono ETF UCITS: qui sono usate le quotazioni
+# di Parigi (ANX.PA) e Xetra (QDVE.DE); per un'altra borsa cambiare il suffisso.
+STOCKS = [
+    ("SpaceX", "SPCX"),
+    ("Humana", "HUM"),
+    ("Amundi Nasdaq 100", "ANX.PA"),
+    ("iShares S&P 500 IT", "QDVE.DE"),
+    ("AMD", "AMD"),
+    ("Alphabet", "GOOGL"),
+    ("Taiwan Semiconductor", "TSM"),
+    ("NVIDIA", "NVDA"),
+    ("Oracle", "ORCL"),
+    ("Adobe", "ADBE"),
+    ("Seagate", "STX"),
+    ("Novartis", "NVS"),
+    ("Eni", "ENI.MI"),
+    ("Palantir", "PLTR"),
+    ("Take-Two", "TTWO"),
+]
+CURRENCY = {"USD": "$", "EUR": "€", "CHF": "CHF", "GBP": "£"}
+STOCKS_ROTATE = int(os.environ.get("STOCKS_ROTATE", "90"))  # gradi antiorari; 270 = verso opposto
+
+
+def fetch_quote(sym):
+    """Ultima quotazione e chiusura del giorno di borsa precedente, da Yahoo Finance."""
+    q = urllib.parse.urlencode({"range": "1mo", "interval": "1d"})
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(sym)}?{q}"
+    res = get_json(url, timeout=15, tries=3)["chart"]["result"][0]
+    meta = res["meta"]
+    closes = res["indicators"]["quote"][0]["close"]
+    bars = [(t, c) for t, c in zip(res["timestamp"], closes) if c is not None]
+    if len(bars) < 2:
+        raise ValueError("storico insufficiente")
+    last = float(meta.get("regularMarketPrice") or bars[-1][1])
+    prev = float(bars[-2][1])
+    tz = ZoneInfo(meta.get("exchangeTimezoneName") or "UTC")
+    when = datetime.fromtimestamp(meta.get("regularMarketTime") or bars[-1][0], tz)
+    series = [float(c) for _, c in bars[-10:]]
+    series[-1] = last
+    return {"last": last, "prev": prev, "pct": (last / prev - 1) * 100, "cur": meta.get("currency", "USD"),
+            "date": when.strftime("%Y-%m-%d"), "series": series}
+
+
+def fetch_quotes(site_url=None):
+    """Scarica tutti i titoli; per quelli che falliscono riusa l'ultimo dato pubblicato."""
+    out, failed, streak = {}, [], 0
+    for name, sym in STOCKS:
+        if streak >= 3:  # Yahoo non risponde: inutile insistere
+            failed.append(sym)
+            continue
+        try:
+            out[sym] = fetch_quote(sym)
+            streak = 0
+        except Exception as e:  # noqa: BLE001
+            print("titolo", sym, type(e).__name__, e, file=sys.stderr)
+            failed.append(sym)
+            streak += 1
+        time.sleep(0.3)
+    if failed and site_url:
+        try:
+            old = get_json(site_url.rstrip("/") + "/quotes.json", tries=1)
+            for sym in failed:
+                if sym in old:
+                    out[sym] = dict(old[sym], stale=True)
+        except Exception as e:  # noqa: BLE001
+            print("titoli cache:", e, file=sys.stderr)
+    return out
+
+
+def _spark(d, series, x0, x1, yc, h):
+    lo, hi = min(series), max(series)
+    span = (hi - lo) or 1.0
+    pts = [(x0 + (x1 - x0) * i / (len(series) - 1), yc + h / 2 - h * (v - lo) / span)
+           for i, v in enumerate(series)]
+    d.line(pts, fill=DARK, width=2)
+    x, y = pts[-1]
+    d.ellipse([x - 3, y - 3, x + 3, y + 3], fill=BLACK)
+
+
+def draw_stocks(quotes, now):
+    """Schermata titoli in orizzontale (1024x758)."""
+    LW, LH = H, W
+    img = Image.new("L", (LW, LH), WHITE)
+    d = ImageDraw.Draw(img)
+    text(d, (30, 16), "Titoli", font(34, True))
+    got = [quotes[s] for _, s in STOCKS if s in quotes]
+    up = sum(1 for q in got if q["pct"] >= 0)
+    text(d, (LW - 30, 18), f"▲ {up}   ▼ {len(got) - up}", font(26, True), anchor="ra")
+    sub = "variazione rispetto al giorno precedente"
+    if got:
+        last_day = max(q["date"] for q in got)
+        if last_day != now.strftime("%Y-%m-%d"):
+            sub += f"  ·  ultima seduta {last_day[8:10]}/{last_day[5:7]}"
+    text(d, (30 + d.textlength("Titoli", font=font(34, True)) + 22, 28), sub, font(19), DARK)
+    d.line([30, 66, LW - 30, 66], fill=BLACK, width=3)
+
+    top, rh = 72, 43
+    for i, (name, sym) in enumerate(STOCKS):
+        y = top + i * rh
+        cy = y + rh / 2
+        if i:
+            d.line([30, y, LW - 30, y], fill=LIGHT, width=1)
+        fs = 24
+        while fs > 16 and d.textlength(name, font=font(fs, True)) > 270:
+            fs -= 1
+        text(d, (30, cy), name, font(fs, True), anchor="lm")
+        text(d, (312, cy + 1), sym.split(".")[0], font(17), MID, "lm")
+        q = quotes.get(sym)
+        if q is None:
+            text(d, (LW - 30, cy), "n.d.", font(24), MID, "rm")
+            continue
+        cur = CURRENCY.get(q["cur"], q["cur"])
+        text(d, (640, cy), f"{num(q['last'], 2)} {cur}", font(23), BLACK, "rm")
+        if len(q["series"]) > 2:
+            _spark(d, q["series"], 668, 790, cy, 24)
+        pct = q["pct"]
+        label = f"{'▲' if pct >= 0 else '▼'} {'+' if pct >= 0 else '−'}{num(abs(pct), 2)}%"
+        if q.get("stale"):
+            label += "*"
+        f = font(26, True)
+        if abs(pct) >= 3:  # movimento forte: testo bianco su sfondo nero
+            tw = d.textlength(label, font=f)
+            d.rounded_rectangle([LW - 30 - tw - 14, y + 5, LW - 30 + 2, y + rh - 5], radius=6, fill=BLACK)
+            text(d, (LW - 36, cy), label, f, WHITE, "rm")
+        else:
+            text(d, (LW - 32, cy), label, f, BLACK, "rm")
+    foot = f"Aggiornato alle {now.strftime('%H:%M')}  ·  ultima quotazione vs chiusura precedente"
+    if any(q.get("stale") for q in got):
+        foot += "  ·  * dato non aggiornato"
+    text(d, (LW / 2, LH - 8), foot, font(16), MID, "ms")
+    return img.rotate(STOCKS_ROTATE, expand=True)
 
 
 # ---------------------------------------------------------------- icone meteo
@@ -346,18 +482,40 @@ def main():
             print("solare:", type(e).__name__, file=sys.stderr)
             errors.append("impianto non aggiornato")
     img = render(weather, solar, os.environ.get("PLACE", "Segrate"), now, errors)
-    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
+    outdir = os.path.dirname(a.out) or "."
+    os.makedirs(outdir, exist_ok=True)
     img.save(a.out, optimize=True)
+
+    # schermata titoli (un errore qui non deve mai bloccare il deck meteo/fotovoltaico)
+    quotes = {}
+    try:
+        if a.sample:
+            qpath = os.path.join(a.sample, "quotes.json")
+            quotes = json.load(open(qpath)) if os.path.exists(qpath) else {}
+        else:
+            quotes = fetch_quotes(os.environ.get("SITE_URL"))
+        stocks_img = draw_stocks(quotes, now)
+        stocks_img.save(os.path.join(outdir, "stocks.png"), optimize=True)
+        if quotes and not a.sample:
+            with open(os.path.join(outdir, "quotes.json"), "w") as f:
+                json.dump(quotes, f)
+    except Exception as e:  # noqa: BLE001
+        print("titoli:", type(e).__name__, e, file=sys.stderr)
+        quotes = {}
+
     if not a.sample:
-        # endpoint letto dal Kobo: indirizzo dell'immagine e secondi fino al prossimo aggiornamento
+        # endpoint letto dal Kobo: indirizzo dell'immagine e secondi fino al prossimo aggiornamento.
+        # Le due schermate si alternano a ogni quarto d'ora.
         site = os.environ.get("SITE_URL", "").rstrip("/")
-        api = os.path.join(os.path.dirname(a.out) or ".", "api")
+        api = os.path.join(outdir, "api")
         os.makedirs(api, exist_ok=True)
+        screen = "stocks" if quotes and int(now.timestamp() // 900) % 2 else "deck"
         with open(os.path.join(api, "display"), "w") as f:
-            json.dump({"status": 0, "image_url": site + "/deck.png", "filename": "deck",
+            json.dump({"status": 0, "image_url": f"{site}/{screen}.png",
+                       "filename": f"{screen}-{now:%Y%m%d-%H%M}",
                        "refresh_rate": 3600 if now.hour < 6 else 900}, f)
     if weather is not None and not a.sample:
-        with open(os.path.join(os.path.dirname(a.out) or ".", "weather.json"), "w") as f:
+        with open(os.path.join(outdir, "weather.json"), "w") as f:
             json.dump(weather, f)
     print("scritto", a.out)
     if weather is None and solar is None:
