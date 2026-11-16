@@ -60,6 +60,21 @@ def fetch_weather(lat, lon):
     return get_json("https://api.open-meteo.com/v1/forecast?" + q)
 
 
+def fetch_air(lat, lon):
+    q = urllib.parse.urlencode({
+        "latitude": lat, "longitude": lon, "timezone": "Europe/Rome",
+        "current": "european_aqi,pm10,pm2_5,nitrogen_dioxide,ozone",
+    })
+    return get_json("https://air-quality-api.open-meteo.com/v1/air-quality?" + q, tries=3)["current"]
+
+
+def aqi_label(v):
+    for lim, lab in ((20, "Buona"), (40, "Discreta"), (60, "Moderata"), (80, "Scadente"), (100, "Molto scadente")):
+        if v <= lim:
+            return lab
+    return "Pessima"
+
+
 def fetch_solar(kiosk_url):
     u = urllib.parse.urlparse(kiosk_url)
     kk = urllib.parse.parse_qs(urllib.parse.urlparse(u.fragment).query).get("kk") \
@@ -204,7 +219,18 @@ def draw_weather(d, w, y0, now):
         icon(d, wmo(daily["weather_code"][i])[0], cx + 58, y2 + 26, 36)
         text(d, (cx - 78, y2 + 44),
              f"{round(daily['temperature_2m_min'][i])}° / {round(daily['temperature_2m_max'][i])}°", font(21), DARK)
-    return y2 + 85
+    y3 = y2 + 85
+    air = w.get("_air")
+    if air and air.get("european_aqi") is not None:
+        d.line([30, y3, W - 30, y3], fill=LIGHT, width=2)
+        text(d, (30, y3 + 12), "ARIA", font(20, True), DARK)
+        lab = f"{aqi_label(air['european_aqi'])} ({round(air['european_aqi'])})"
+        text(d, (100, y3 + 9), lab, font(24, True))
+        det = "  ".join(f"{n} {round(air[k])}" for n, k in (("PM2.5", "pm2_5"), ("PM10", "pm10"), ("NO₂", "nitrogen_dioxide"))
+                        if air.get(k) is not None) + " µg/m³"
+        text(d, (W - 30, y3 + 13), det, font(19), DARK, "ra")
+        y3 += 48
+    return y3
 
 
 def draw_solar(d, s, y0):
@@ -236,7 +262,7 @@ def draw_solar(d, s, y0):
             vals.append(float(v))
         except (TypeError, ValueError):
             vals.append(None)
-    x0, x1, yb, yt = 70, W - 30, H - 62, y0 + 200
+    x0, x1, yb, yt = 70, W - 30, H - 62, y0 + 204
     d.line([x0, yb, x1, yb], fill=BLACK, width=2)
     peak = max([v for v in vals if v is not None] or [0])
     top = max(1.0, math.ceil(peak))
@@ -293,6 +319,14 @@ def main():
     else:
         try:
             weather = fetch_weather(os.environ.get("LAT", "45.4905"), os.environ.get("LON", "9.2953"))
+            try:
+                weather["_air"] = fetch_air(os.environ.get("LAT", "45.4905"), os.environ.get("LON", "9.2953"))
+            except Exception as e:  # noqa: BLE001
+                print("aria:", e, file=sys.stderr)
+                try:  # riusa l'ultimo valore pubblicato
+                    weather["_air"] = get_json(os.environ["SITE_URL"].rstrip("/") + "/weather.json", tries=1).get("_air")
+                except Exception:  # noqa: BLE001
+                    pass
         except Exception as e:  # noqa: BLE001
             print("meteo:", e, file=sys.stderr)
             # riusa l'ultimo meteo pubblicato, se recente (meno di 3 ore)
