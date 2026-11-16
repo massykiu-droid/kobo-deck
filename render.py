@@ -441,6 +441,18 @@ def render(weather, solar, place, now, errors):
     return img
 
 
+def shape(obj, depth=0):
+    """Descrive la struttura di un JSON senza rivelarne i valori."""
+    if isinstance(obj, dict):
+        return {k: shape(v, depth + 1) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return {"list": len(obj), "item": shape(obj[0], depth + 1) if obj else None}
+    if isinstance(obj, str):
+        kind = "numero-come-testo" if obj.replace(".", "", 1).lstrip("-").isdigit() else "testo"
+        return f"{kind}({len(obj)})"
+    return type(obj).__name__
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sample", help="cartella con weather.json e solar.json (test offline)")
@@ -486,6 +498,11 @@ def main():
     outdir = os.path.dirname(a.out) or "."
     os.makedirs(outdir, exist_ok=True)
     img.save(a.out, optimize=True)
+
+    # struttura (solo chiavi e tipi, nessun valore) dei dati del Kiosk, per progettare la schermata
+    if solar is not None and not a.sample:
+        with open(os.path.join(outdir, "solar-schema.json"), "w") as f:
+            json.dump(shape(solar), f, indent=1)
 
     # schermata titoli (un errore qui non deve mai bloccare il deck meteo/fotovoltaico)
     quotes = {}
