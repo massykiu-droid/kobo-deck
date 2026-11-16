@@ -161,7 +161,10 @@ def draw_weather(d, w, y0, now):
     kind, desc = wmo(cur["weather_code"])
     icon(d, kind, 135, y0 + 105, 118)
     text(d, (255, y0 + 20), f"{round(cur['temperature_2m'])}°", font(130, True))
-    text(d, (258, y0 + 172), desc, font(32, True))
+    fs = 32
+    while fs > 20 and d.textlength(desc, font=font(fs, True)) > 235:
+        fs -= 2
+    text(d, (258, y0 + 172), desc, font(fs, True))
     x = 510
     rows = [
         ("Percepita", f"{round(cur['apparent_temperature'])}°"),
@@ -183,7 +186,7 @@ def draw_weather(d, w, y0, now):
     cw = (W - 60) / max(1, len(idx))
     for n, i in enumerate(idx):
         cx = 30 + cw * n + cw / 2
-        text(d, (cx, y1), times[i].strftime("%H:%M"), font(20), DARK, "ma")
+        text(d, (cx, y1 - 8), times[i].strftime("%H:%M"), font(20), DARK, "ma")
         icon(d, wmo(hourly["weather_code"][i])[0], cx, y1 + 55, 46)
         text(d, (cx, y1 + 92), f"{round(hourly['temperature_2m'][i])}°", font(24, True), anchor="ma")
         p = hourly["precipitation_probability"][i] or 0
@@ -311,6 +314,14 @@ def main():
     img = render(weather, solar, os.environ.get("PLACE", "Segrate"), now, errors)
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     img.save(a.out, optimize=True)
+    if not a.sample:
+        # endpoint letto dal Kobo: indirizzo dell'immagine e secondi fino al prossimo aggiornamento
+        site = os.environ.get("SITE_URL", "").rstrip("/")
+        api = os.path.join(os.path.dirname(a.out) or ".", "api")
+        os.makedirs(api, exist_ok=True)
+        with open(os.path.join(api, "display"), "w") as f:
+            json.dump({"status": 0, "image_url": site + "/deck.png", "filename": "deck",
+                       "refresh_rate": 3600 if now.hour < 6 else 900}, f)
     if weather is not None and not a.sample:
         with open(os.path.join(os.path.dirname(a.out) or ".", "weather.json"), "w") as f:
             json.dump(weather, f)
