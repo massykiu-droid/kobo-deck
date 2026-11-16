@@ -91,14 +91,14 @@ def fetch_solar(kiosk_url):
 
 # ---------------------------------------------------------------- titoli
 # (nome mostrato, simbolo Yahoo Finance). Per cambiare un titolo basta modificare questa lista.
-# Tutto quotato negli Stati Uniti. Gli ETF UCITS (Amundi Nasdaq 100, iShares S&P 500 IT) non
-# sono negoziati in USA: al loro posto gli ETF americani sugli stessi indici (QQQ, XLK).
+# Titoli in dollari. Gli ETF UCITS (Amundi Nasdaq 100, iShares S&P 500 IT) non sono negoziati
+# negli USA: si usano le loro quotazioni in USD alla Borsa di Londra (ANXU.L, IUIT.L).
 # Eni e' l'ADR di New York.
 STOCKS = [
     ("SpaceX", "SPCX"),
     ("Humana", "HUM"),
-    ("Nasdaq 100 (ETF)", "QQQ"),
-    ("S&P 500 IT (ETF)", "XLK"),
+    ("Amundi Nasdaq 100", "ANXU.L"),
+    ("iShares S&P 500 IT", "IUIT.L"),
     ("AMD", "AMD"),
     ("Alphabet", "GOOGL"),
     ("Taiwan Semiconductor", "TSM"),
