@@ -511,10 +511,17 @@ def main():
         api = os.path.join(outdir, "api")
         os.makedirs(api, exist_ok=True)
         screen = "stocks" if quotes and int(now.timestamp() // 900) % 2 else "deck"
-        with open(os.path.join(api, "display"), "w") as f:
-            json.dump({"status": 0, "image_url": f"{site}/{screen}.png",
-                       "filename": f"{screen}-{now:%Y%m%d-%H%M}",
-                       "refresh_rate": 3600 if now.hour < 6 else 900}, f)
+        refresh = 3600 if now.hour < 6 else 900
+
+        def write_display(folder, shown):
+            os.makedirs(folder, exist_ok=True)
+            with open(os.path.join(folder, "display"), "w") as f:
+                json.dump({"status": 0, "image_url": f"{site}/{shown}.png",
+                           "filename": f"{shown}-{now:%Y%m%d-%H%M}", "refresh_rate": refresh}, f)
+
+        write_display(api, screen)  # alternata
+        write_display(os.path.join(outdir, "api-meteo"), "deck")  # solo meteo e fotovoltaico
+        write_display(os.path.join(outdir, "api-titoli"), "stocks")  # solo titoli
     if weather is not None and not a.sample:
         with open(os.path.join(outdir, "weather.json"), "w") as f:
             json.dump(weather, f)

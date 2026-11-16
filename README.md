@@ -5,7 +5,7 @@ Genera ogni 15 minuti due immagini 758×1024 in scala di grigi, pubblicate su Gi
 - `deck.png`: meteo (Open-Meteo) e produzione fotovoltaica (FusionSolar Kiosk)
 - `stocks.png`: andamento dei titoli (Yahoo Finance), variazione rispetto al giorno precedente. È disegnata in orizzontale e ruotata di 90° per stare nello schermo verticale: si legge ruotando il Kobo (con `STOCKS_ROTATE=270` si ruota nel verso opposto)
 
-`api/display` indica al client trmnl-kobo quale delle due mostrare, alternandole a ogni quarto d'ora.
+Per il client trmnl-kobo ci sono tre indirizzi: `api/display` (alterna le due schermate a ogni quarto d'ora), `api-meteo/display` (solo meteo e fotovoltaico) e `api-titoli/display` (solo titoli).
 
 - `render.py`: scarica i dati e disegna le immagini. L'elenco dei titoli è la lista `STOCKS` in cima alla sezione "titoli"
 - `.github/workflows/deck.yml`: esecuzione programmata e pubblicazione
