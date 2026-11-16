@@ -14,9 +14,10 @@ import math
 import os
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from PIL import Image, ImageDraw, ImageFont
@@ -441,16 +442,210 @@ def render(weather, solar, place, now, errors):
     return img
 
 
-def shape(obj, depth=0):
-    """Descrive la struttura di un JSON senza rivelarne i valori."""
-    if isinstance(obj, dict):
-        return {k: shape(v, depth + 1) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return {"list": len(obj), "item": shape(obj[0], depth + 1) if obj else None}
-    if isinstance(obj, str):
-        kind = "numero-come-testo" if obj.replace(".", "", 1).lstrip("-").isdigit() else "testo"
-        return f"{kind}({len(obj)})"
-    return type(obj).__name__
+# ---------------------------------------------------------------- fotovoltaico (schermata dedicata)
+HIST_KEEP_DAYS = 400
+
+
+def curve_of(s):
+    """Potenza di oggi, un valore ogni 5 minuti (None dove manca)."""
+    out = []
+    for v in (s.get("powerCurve") or {}).get("activePower", []):
+        try:
+            out.append(float(v))
+        except (TypeError, ValueError):
+            out.append(None)
+    return out
+
+
+def load_history(site_url):
+    """Storico pubblicato in precedenza: primo avvio -> vuoto, errore di rete -> eccezione.
+
+    Pages sostituisce tutto a ogni pubblicazione: se lo storico non si legge, meglio non pubblicare."""
+    empty = {"days": {}, "months": {}, "years": {}, "curves": {}}
+    url = site_url.rstrip("/") + "/pv-history.json"
+    last = None
+    for n in range(3):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 kobo-deck"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                h = json.loads(r.read().decode("utf-8"))
+            for k in empty:
+                h.setdefault(k, {})
+            return h
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return empty
+            last = e
+        except Exception as e:  # noqa: BLE001
+            last = e
+        time.sleep(3 * (n + 1))
+    raise last
+
+
+def update_history(h, s, now):
+    k = s["realKpi"]
+    h["months"][now.strftime("%Y-%m")] = round(float(k["monthEnergy"]), 1)
+    h["years"][now.strftime("%Y")] = round(float(k["yearEnergy"]), 1)
+    if now.hour < 5:  # di notte il Kiosk puo' ancora mostrare i dati del giorno prima
+        return
+    day = now.strftime("%Y-%m-%d")
+    vals = curve_of(s)
+    peak = max([v for v in vals if v is not None] or [0.0])
+    d = h["days"].setdefault(day, {"kwh": 0.0, "peak": 0.0})
+    d["kwh"] = round(max(d["kwh"], float(k["dailyEnergy"])), 2)
+    d["peak"] = round(max(d["peak"], peak), 2)
+    h["curves"][day] = [None if v is None else round(v, 2) for v in vals]
+    for old in sorted(h["curves"])[:-3]:
+        del h["curves"][old]
+    for old in sorted(h["days"])[:-HIST_KEEP_DAYS]:
+        del h["days"][old]
+
+
+def intit(n):
+    return f"{int(round(n)):,}".replace(",", ".")
+
+
+def draw_pv(s, hist, now, errors):
+    """Schermata fotovoltaico, verticale 758x1024."""
+    img = Image.new("L", (W, H), WHITE)
+    d = ImageDraw.Draw(img)
+    text(d, (30, 20), "Fotovoltaico", font(34, True))
+    text(d, (W - 30, 28), f"{GIORNI[now.weekday()]} {now.day} {MESI[now.month - 1][:3]}", font(26), DARK, "ra")
+    d.line([30, 76, W - 30, 76], fill=BLACK, width=3)
+    foot = f"Aggiornato alle {now.strftime('%H:%M')}" + ("  ·  " + ", ".join(errors) if errors else "")
+    text(d, (W / 2, H - 14), foot, font(16), MID, "ms")
+    if s is None:
+        text(d, (W / 2, 420), "Dati impianto non disponibili", font(26), MID, "ma")
+        return img
+    k = s["realKpi"]
+    power, daily = float(k["realTimePower"]), float(k["dailyEnergy"])
+    vals = curve_of(s)
+    peak = max([v for v in vals if v is not None] or [0.0])
+    today = now.strftime("%Y-%m-%d")
+    yday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    days = hist.get("days", {})
+    yd = days.get(yday)
+
+    # --- adesso / oggi / picco
+    text(d, (30, 90), num(power, 2), font(88, True))
+    wv = d.textlength(num(power, 2), font=font(88, True))
+    text(d, (42 + wv, 146), "kW", font(32, True), DARK)
+    text(d, (32, 192), "produzione attuale", font(20), DARK)
+    text(d, (420, 92), "OGGI", font(18, True), DARK)
+    text(d, (420, 112), num(daily, 1), font(40, True))
+    text(d, (420 + d.textlength(num(daily, 1), font=font(40, True)) + 8, 130), "kWh", font(20), DARK)
+    if yd:
+        text(d, (W - 30, 126), f"ieri {num(yd['kwh'], 1)}", font(20), DARK, "ra")
+    text(d, (420, 162), "PICCO", font(18, True), DARK)
+    pt = ""
+    if peak > 0:
+        i = next(i for i, v in enumerate(vals) if v == peak)
+        pt = f"alle {i * 5 // 60:02d}:{i * 5 % 60:02d}"
+    text(d, (420, 180), f"{num(peak, 2)} kW", font(30, True))
+    text(d, (W - 30, 190), pt, font(20), DARK, "ra")
+
+    # --- andamento di oggi (con la curva di ieri come riferimento)
+    d.line([30, 226, W - 30, 226], fill=LIGHT, width=2)
+    text(d, (30, 236), "ANDAMENTO DI OGGI", font(18, True), DARK)
+    ycurve = hist.get("curves", {}).get(yday)
+    x0, x1, yt, yb = 70, W - 30, 292, 494
+    top = max(1.0, math.ceil(max([peak] + [v for v in (ycurve or []) if v is not None])))
+    d.line([x0, yb, x1, yb], fill=BLACK, width=2)
+    for frac in (0.5, 1.0):
+        y = yb - (yb - yt) * frac
+        d.line([x0, y, x1, y], fill=LIGHT, width=1)
+        text(d, (x0 - 8, y), num(top * frac, 1), font(17), DARK, "rm")
+    text(d, (x0 - 8, yt - 16), "kW", font(17), DARK, "rm")
+    for hh in (0, 6, 12, 18, 24):
+        x = x0 + (x1 - x0) * hh / 24
+        d.line([x, yb, x, yb + 6], fill=BLACK, width=2)
+        text(d, (x, yb + 9), f"{hh:02d}", font(17), DARK, "ma")
+
+    def pts_of(v):
+        n = len(v) or 288
+        return [(x0 + (x1 - x0) * i / (n - 1), yb - (yb - yt) * min(c, top) / top)
+                for i, c in enumerate(v) if c is not None]
+
+    if ycurve:
+        yp = pts_of(ycurve)
+        if len(yp) > 1:
+            d.line(yp, fill=MID, width=2)
+        text(d, (W - 30, 238), "— oggi    ·· ieri", font(16), DARK, "ra")
+    tp = pts_of(vals)
+    if len(tp) > 1:
+        d.polygon([(tp[0][0], yb)] + tp + [(tp[-1][0], yb)], fill=LIGHT)
+        d.line(tp, fill=BLACK, width=3)
+
+    # --- ultimi 14 giorni
+    d.line([30, 524, W - 30, 524], fill=LIGHT, width=2)
+    text(d, (30, 534), "ULTIMI 14 GIORNI (kWh)", font(18, True), DARK)
+    seq = [(now - timedelta(days=13 - i)) for i in range(14)]
+    series = []
+    for dt in seq:
+        key = dt.strftime("%Y-%m-%d")
+        v = daily if key == today else (days.get(key) or {}).get("kwh")
+        series.append((dt, v))
+    known = [v for _, v in series if v is not None]
+    cx0, cx1, cyt, cyb = 40, W - 30, 580, 722
+    d.line([cx0, cyb, cx1, cyb], fill=BLACK, width=2)
+    month_days = {kk: vv["kwh"] for kk, vv in days.items() if kk.startswith(now.strftime("%Y-%m"))}
+    month_days[today] = max(daily, month_days.get(today, 0))
+    bk = max(month_days, key=month_days.get)
+    if month_days[bk] > 0:
+        text(d, (W - 30, 536), f"migliore del mese: {bk[8:10]}/{bk[5:7]} · {num(month_days[bk], 1)}", font(18), DARK, "ra")
+    if len(known) < 2:
+        text(d, ((cx0 + cx1) / 2, (cyt + cyb) / 2), "storico in raccolta da oggi", font(20), MID, "mm")
+    cmax = max(known + [1.0])
+    slot = (cx1 - cx0) / 14
+    for i, (dt, v) in enumerate(series):
+        cx = cx0 + slot * i + slot / 2
+        text(d, (cx, cyb + 6), str(dt.day), font(15, dt.strftime("%Y-%m-%d") == today), DARK, "ma")
+        if v is None:
+            continue
+        hgt = (cyb - cyt) * v / cmax
+        is_today = dt.strftime("%Y-%m-%d") == today
+        d.rectangle([cx - slot * 0.3, cyb - hgt, cx + slot * 0.3, cyb - 1], fill=BLACK if is_today else MID)
+        text(d, (cx, cyb - hgt - 3), num(v, 0 if v >= 100 else 1), font(14), DARK, "ms")
+
+    # --- mese / anno / totale
+    d.line([30, 758, W - 30, 758], fill=LIGHT, width=2)
+    months, years = hist.get("months", {}), hist.get("years", {})
+    prev_month = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    mval, yval = float(k["monthEnergy"]), float(k["yearEnergy"])
+    cells = [
+        ("MESE", energy(mval), f"media {num(mval / max(now.day, 1), 1)} kWh/giorno",
+         f"mese scorso {energy(months[prev_month])[0]} {energy(months[prev_month])[1]}" if prev_month in months else ""),
+        ("ANNO", energy(yval), f"media {num(yval / max(now.timetuple().tm_yday, 1), 1)} kWh/giorno",
+         (f"anno scorso {energy(years[str(now.year - 1)])[0]} {energy(years[str(now.year - 1)])[1]}"
+          if str(now.year - 1) in years else "")),
+        ("TOTALE", energy(float(k["cumulativeEnergy"])), "dall'installazione", ""),
+    ]
+    cw = (W - 60) / 3
+    for i, (lab, (v, u), sub1, sub2) in enumerate(cells):
+        x = 30 + cw * i
+        text(d, (x, 770), lab, font(18, True), DARK)
+        text(d, (x, 792), v, font(36, True))
+        text(d, (x + d.textlength(v, font=font(36, True)) + 6, 808), u, font(18), DARK)
+        text(d, (x, 840), sub1, font(16), DARK)
+        if sub2:
+            text(d, (x, 862), sub2, font(16), DARK)
+
+    # --- ambiente (da inizio impianto)
+    sc = s.get("socialContribution") or {}
+    if sc.get("co2Reduction") is not None:
+        d.line([30, 890, W - 30, 890], fill=LIGHT, width=2)
+        text(d, (30, 898), "DA INIZIO IMPIANTO", font(18, True), DARK)
+        cum = max(float(k["cumulativeEnergy"]), 1.0)
+        co2, coal = float(sc["co2Reduction"]), float(sc.get("standardCoalSavings") or 0)
+        if co2 / cum < 0.01:  # il Kiosk li da' in tonnellate
+            co2, coal = co2 * 1000, coal * 1000
+        items = [("CO₂ evitata", f"{intit(co2)} kg"), ("alberi equivalenti", intit(float(sc.get("equivalentTreePlanting") or 0))),
+                 ("carbone risparmiato", f"{intit(coal)} kg")]
+        for i, (lab, val) in enumerate(items):
+            x = 30 + cw * i
+            text(d, (x, 924), val, font(28, True))
+            text(d, (x, 960), lab, font(16), DARK)
+    return img
 
 
 def main():
@@ -499,11 +694,6 @@ def main():
     os.makedirs(outdir, exist_ok=True)
     img.save(a.out, optimize=True)
 
-    # struttura (solo chiavi e tipi, nessun valore) dei dati del Kiosk, per progettare la schermata
-    if solar is not None and not a.sample:
-        with open(os.path.join(outdir, "solar-schema.json"), "w") as f:
-            json.dump(shape(solar), f, indent=1)
-
     # schermata titoli (un errore qui non deve mai bloccare il deck meteo/fotovoltaico)
     quotes = {}
     try:
@@ -520,6 +710,28 @@ def main():
     except Exception as e:  # noqa: BLE001
         print("titoli:", type(e).__name__, e, file=sys.stderr)
         quotes = {}
+
+    # schermata fotovoltaico, con lo storico raccolto a ogni esecuzione
+    site_url = os.environ.get("SITE_URL")
+    hist = {"days": {}, "months": {}, "years": {}, "curves": {}}
+    if site_url and not a.sample:
+        try:
+            hist = load_history(site_url)
+        except Exception as e:  # noqa: BLE001
+            # senza lo storico non si pubblica: Pages sostituirebbe tutto e lo storico andrebbe perso
+            print("storico non leggibile, pubblicazione annullata:", type(e).__name__, e, file=sys.stderr)
+            sys.exit(3)
+        if solar is not None:
+            try:
+                update_history(hist, solar, now)
+            except Exception as e:  # noqa: BLE001
+                print("storico:", type(e).__name__, e, file=sys.stderr)
+        with open(os.path.join(outdir, "pv-history.json"), "w") as f:
+            json.dump(hist, f, separators=(",", ":"))
+    try:
+        draw_pv(solar, hist, now, errors).save(os.path.join(outdir, "solar.png"), optimize=True)
+    except Exception as e:  # noqa: BLE001
+        print("fotovoltaico:", type(e).__name__, e, file=sys.stderr)
 
     if not a.sample:
         # endpoint letto dal Kobo: indirizzo dell'immagine e secondi fino al prossimo aggiornamento.
@@ -539,6 +751,7 @@ def main():
         write_display(api, screen)  # alternata
         write_display(os.path.join(outdir, "api-meteo"), "deck")  # solo meteo e fotovoltaico
         write_display(os.path.join(outdir, "api-titoli"), "stocks")  # solo titoli
+        write_display(os.path.join(outdir, "api-fotovoltaico"), "solar")  # solo fotovoltaico
     if weather is not None and not a.sample:
         with open(os.path.join(outdir, "weather.json"), "w") as f:
             json.dump(weather, f)
