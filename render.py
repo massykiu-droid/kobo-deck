@@ -92,12 +92,12 @@ def fetch_solar(kiosk_url):
 # ---------------------------------------------------------------- titoli
 # (nome mostrato, simbolo Yahoo Finance). Per cambiare un titolo basta modificare questa lista.
 # Amundi Nasdaq 100 e iShares S&P 500 IT sono ETF UCITS: qui sono usate le quotazioni
-# di Parigi (ANX.PA) e Xetra (QDVE.DE); per un'altra borsa cambiare il suffisso.
+# in dollari della Borsa di Londra (ANXU.L e IUIT.L); per un'altra borsa cambiare il simbolo.
 STOCKS = [
     ("SpaceX", "SPCX"),
     ("Humana", "HUM"),
-    ("Amundi Nasdaq 100", "ANX.PA"),
-    ("iShares S&P 500 IT", "QDVE.DE"),
+    ("Amundi Nasdaq 100", "ANXU.L"),
+    ("iShares S&P 500 IT", "IUIT.L"),
     ("AMD", "AMD"),
     ("Alphabet", "GOOGL"),
     ("Taiwan Semiconductor", "TSM"),
