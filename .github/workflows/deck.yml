@@ -35,6 +35,7 @@ jobs:
           LAT: "45.4905"
           LON: "9.2953"
           PLACE: Segrate
+          SITE_URL: https://massykiu-droid.github.io/kobo-deck
         run: python render.py --out public/deck.png
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -12,6 +12,7 @@ import json
 import math
 import os
 import sys
+import time
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -35,10 +36,17 @@ def font(size, bold=False):
     return ImageFont.truetype(FONT_DIR + name, size)
 
 
-def get_json(url, timeout=30):
+def get_json(url, timeout=20, tries=4):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 kobo-deck"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
+    last = None
+    for n in range(tries):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except Exception as e:  # noqa: BLE001
+            last = e
+            time.sleep(3 * (n + 1))
+    raise last
 
 
 # ---------------------------------------------------------------- dati
@@ -284,7 +292,17 @@ def main():
             weather = fetch_weather(os.environ.get("LAT", "45.4905"), os.environ.get("LON", "9.2953"))
         except Exception as e:  # noqa: BLE001
             print("meteo:", e, file=sys.stderr)
-            errors.append("meteo non aggiornato")
+            # riusa l'ultimo meteo pubblicato, se recente (meno di 3 ore)
+            try:
+                old = get_json(os.environ["SITE_URL"].rstrip("/") + "/weather.json", tries=1)
+                age = now - datetime.fromisoformat(old["current"]["time"]).replace(tzinfo=TZ)
+                if age.total_seconds() < 3 * 3600:
+                    weather = old
+                    errors.append("meteo delle " + old["current"]["time"][11:16])
+            except Exception as e2:  # noqa: BLE001
+                print("meteo cache:", e2, file=sys.stderr)
+            if weather is None:
+                errors.append("meteo non aggiornato")
         try:
             solar = fetch_solar(os.environ["KIOSK_URL"])
         except Exception as e:  # noqa: BLE001
@@ -293,6 +311,9 @@ def main():
     img = render(weather, solar, os.environ.get("PLACE", "Segrate"), now, errors)
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     img.save(a.out, optimize=True)
+    if weather is not None and not a.sample:
+        with open(os.path.join(os.path.dirname(a.out) or ".", "weather.json"), "w") as f:
+            json.dump(weather, f)
     print("scritto", a.out)
     if weather is None and solar is None:
         sys.exit(1)
