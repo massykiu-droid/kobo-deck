@@ -11,6 +11,8 @@ Uso: python render.py [--sample DIR] [--out FILE]
 import argparse
 import json
 import math
+import re
+import traceback
 import os
 import sys
 import time
@@ -36,6 +38,14 @@ MESI = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio",
 def font(size, bold=False):
     name = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
     return ImageFont.truetype(FONT_DIR + name, size)
+
+
+def msg(e, tb=False):
+    """Messaggio d'errore breve e senza segreti (il parametro kk del Kiosk viene oscurato)."""
+    t = f"{type(e).__name__}: {e}"
+    if tb:
+        t += " @ " + " | ".join(l.strip() for l in traceback.format_exc().splitlines()[-4:-1])
+    return re.sub(r"kk=[^&\s'\"]+", "kk=***", t)[:300]
 
 
 def get_json(url, timeout=20, tries=4):
@@ -602,7 +612,7 @@ def draw_pv(s, hist, now, errors):
         text(d, (cx, cyb + 6), str(dt.day), font(15, dt.strftime("%Y-%m-%d") == today), DARK, "ma")
         if v is None:
             continue
-        hgt = (cyb - cyt) * v / cmax
+        hgt = max((cyb - cyt) * v / cmax, 2)  # almeno 2 px, anche con produzione zero
         is_today = dt.strftime("%Y-%m-%d") == today
         d.rectangle([cx - slot * 0.3, cyb - hgt, cx + slot * 0.3, cyb - 1], fill=BLACK if is_today else MID)
         text(d, (cx, cyb - hgt - 3), num(v, 0 if v >= 100 else 1), font(14), DARK, "ms")
@@ -656,6 +666,7 @@ def main():
     now = datetime.now(TZ)
     weather = solar = None
     errors = []
+    status = {"generato": now.isoformat(timespec="minutes")}
     if a.sample:
         weather = json.load(open(os.path.join(a.sample, "weather.json")))
         solar = json.load(open(os.path.join(a.sample, "solar.json")))
@@ -663,31 +674,38 @@ def main():
     else:
         try:
             weather = fetch_weather(os.environ.get("LAT", "45.4905"), os.environ.get("LON", "9.2953"))
+            status["meteo"] = "ok"
             try:
                 weather["_air"] = fetch_air(os.environ.get("LAT", "45.4905"), os.environ.get("LON", "9.2953"))
             except Exception as e:  # noqa: BLE001
                 print("aria:", e, file=sys.stderr)
+                status["aria"] = msg(e)
                 try:  # riusa l'ultimo valore pubblicato
                     weather["_air"] = get_json(os.environ["SITE_URL"].rstrip("/") + "/weather.json", tries=1).get("_air")
                 except Exception:  # noqa: BLE001
                     pass
         except Exception as e:  # noqa: BLE001
             print("meteo:", e, file=sys.stderr)
+            status["meteo"] = "errore: " + msg(e)
             # riusa l'ultimo meteo pubblicato, se recente (meno di 3 ore)
             try:
                 old = get_json(os.environ["SITE_URL"].rstrip("/") + "/weather.json", tries=1)
                 age = now - datetime.fromisoformat(old["current"]["time"]).replace(tzinfo=TZ)
-                if age.total_seconds() < 3 * 3600:
+                if age.total_seconds() < 24 * 3600:
                     weather = old
                     errors.append("meteo delle " + old["current"]["time"][11:16])
+                    status["meteo_cache"] = old["current"]["time"]
             except Exception as e2:  # noqa: BLE001
                 print("meteo cache:", e2, file=sys.stderr)
+                status["meteo_cache"] = "non disponibile: " + msg(e2)
             if weather is None:
                 errors.append("meteo non aggiornato")
         try:
             solar = fetch_solar(os.environ["KIOSK_URL"])
+            status["kiosk"] = "ok"
         except Exception as e:  # noqa: BLE001
             print("solare:", type(e).__name__, file=sys.stderr)
+            status["kiosk"] = "errore: " + msg(e)
             errors.append("impianto non aggiornato")
     img = render(weather, solar, os.environ.get("PLACE", "Segrate"), now, errors)
     outdir = os.path.dirname(a.out) or "."
@@ -704,11 +722,14 @@ def main():
             quotes = fetch_quotes(os.environ.get("SITE_URL"))
         stocks_img = draw_stocks(quotes, now)
         stocks_img.save(os.path.join(outdir, "stocks.png"), optimize=True)
+        status["titoli"] = f"{len(quotes)}/{len(STOCKS)} quotazioni, " + ", ".join(
+            s_ for _, s_ in STOCKS if s_ not in quotes or quotes[s_].get("stale")) + " mancanti o vecchie"
         if quotes and not a.sample:
             with open(os.path.join(outdir, "quotes.json"), "w") as f:
                 json.dump(quotes, f)
     except Exception as e:  # noqa: BLE001
         print("titoli:", type(e).__name__, e, file=sys.stderr)
+        status["titoli"] = "errore: " + msg(e, True)
         quotes = {}
 
     # schermata fotovoltaico, con lo storico raccolto a ogni esecuzione
@@ -726,12 +747,15 @@ def main():
                 update_history(hist, solar, now)
             except Exception as e:  # noqa: BLE001
                 print("storico:", type(e).__name__, e, file=sys.stderr)
+                status["storico"] = "errore: " + msg(e, True)
         with open(os.path.join(outdir, "pv-history.json"), "w") as f:
             json.dump(hist, f, separators=(",", ":"))
     try:
         draw_pv(solar, hist, now, errors).save(os.path.join(outdir, "solar.png"), optimize=True)
+        status["solar_png"] = "ok"
     except Exception as e:  # noqa: BLE001
         print("fotovoltaico:", type(e).__name__, e, file=sys.stderr)
+        status["solar_png"] = "errore: " + msg(e, True)
 
     if not a.sample:
         # endpoint letto dal Kobo: indirizzo dell'immagine e secondi fino al prossimo aggiornamento.
@@ -755,6 +779,10 @@ def main():
     if weather is not None and not a.sample:
         with open(os.path.join(outdir, "weather.json"), "w") as f:
             json.dump(weather, f)
+    status["giorni_storico"] = len(hist.get("days", {}))
+    if not a.sample:
+        with open(os.path.join(outdir, "status.json"), "w") as f:
+            json.dump(status, f, indent=1, ensure_ascii=False)
     print("scritto", a.out)
     if weather is None and solar is None:
         sys.exit(1)
