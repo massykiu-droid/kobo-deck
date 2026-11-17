@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 from PIL import Image, ImageDraw, ImageFont
 
-W, H = 758, 1024  # Kobo Glo, verticale
+W, H = 758, 1024  # Kobo Glo: file verticale; tutte le schermate sono disegnate in orizzontale e ruotate
 TZ = ZoneInfo("Europe/Rome")
 FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
 BLACK, DARK, MID, LIGHT, WHITE = 0, 70, 130, 200, 255
@@ -318,17 +318,25 @@ def energy(kwh):
     return (num(kwh / 1000, 2), "MWh") if kwh >= 1000 else (num(kwh, 1), "kWh")
 
 
-# ---------------------------------------------------------------- sezioni
-def draw_weather(d, w, y0, now):
+# ---------------------------------------------------------------- sezioni (schermata in orizzontale 1024x758)
+LW, LH = H, W  # si disegna in orizzontale, poi si ruota come per i titoli
+
+
+def to_portrait(img):
+    return img.rotate(STOCKS_ROTATE, expand=True)
+
+
+def draw_weather(d, w, x0, x1, y0, now):
+    """Meteo nella colonna sinistra (x0..x1). Restituisce la y finale."""
     cur, daily, hourly = w["current"], w["daily"], w["hourly"]
     kind, desc = wmo(cur["weather_code"])
-    icon(d, kind, 135, y0 + 105, 118)
-    text(d, (255, y0 + 20), f"{round(cur['temperature_2m'])}°", font(130, True))
-    fs = 32
-    while fs > 20 and d.textlength(desc, font=font(fs, True)) > 235:
+    icon(d, kind, x0 + 52, y0 + 56, 80)
+    text(d, (x0 + 120, y0 - 12), f"{round(cur['temperature_2m'])}°", font(96, True))
+    fs = 28
+    while fs > 18 and d.textlength(desc, font=font(fs, True)) > 300:
         fs -= 2
-    text(d, (258, y0 + 172), desc, font(fs, True))
-    x = 510
+    text(d, (x0 + 2, y0 + 128), desc, font(fs, True))
+    xr = x0 + 330
     rows = [
         ("Percepita", f"{round(cur['apparent_temperature'])}°"),
         ("Min/Max", f"{round(daily['temperature_2m_min'][0])}°/{round(daily['temperature_2m_max'][0])}°"),
@@ -337,70 +345,74 @@ def draw_weather(d, w, y0, now):
         ("Umidità", f"{cur['relative_humidity_2m']}%"),
     ]
     for i, (k, v) in enumerate(rows):
-        yy = y0 + 28 + i * 38
-        text(d, (x, yy), k, font(22), DARK)
-        text(d, (W - 30, yy), v, font(24, True), anchor="ra")
+        yy = y0 + 2 + i * 32
+        text(d, (xr, yy), k, font(19), DARK)
+        text(d, (x1, yy), v, font(21, True), anchor="ra")
 
     # prossime ore
-    y1 = y0 + 235
+    y1 = y0 + 200
+    width = x1 - x0
     times = [datetime.fromisoformat(t).replace(tzinfo=TZ) for t in hourly["time"]]
     start = next((i for i, t in enumerate(times) if t >= now), 0)
     idx = [start + k * 3 for k in range(6) if start + k * 3 < len(times)]
-    cw = (W - 60) / max(1, len(idx))
+    cw = width / max(1, len(idx))
     for n, i in enumerate(idx):
-        cx = 30 + cw * n + cw / 2
-        text(d, (cx, y1 - 8), times[i].strftime("%H:%M"), font(20), DARK, "ma")
-        icon(d, wmo(hourly["weather_code"][i])[0], cx, y1 + 55, 46)
-        text(d, (cx, y1 + 92), f"{round(hourly['temperature_2m'][i])}°", font(24, True), anchor="ma")
+        cx = x0 + cw * n + cw / 2
+        text(d, (cx, y1 - 8), times[i].strftime("%H:%M"), font(19), DARK, "ma")
+        icon(d, wmo(hourly["weather_code"][i])[0], cx, y1 + 50, 42)
+        text(d, (cx, y1 + 84), f"{round(hourly['temperature_2m'][i])}°", font(23, True), anchor="ma")
         p = hourly["precipitation_probability"][i] or 0
-        text(d, (cx, y1 + 122), f"{p}%", font(18), DARK if p >= 30 else MID, "ma")
+        text(d, (cx, y1 + 112), f"{p}%", font(17), DARK if p >= 30 else MID, "ma")
 
     # prossimi giorni
-    y2 = y1 + 165
-    d.line([30, y2 - 10, W - 30, y2 - 10], fill=LIGHT, width=2)
+    y2 = y1 + 150
+    d.line([x0, y2 - 8, x1, y2 - 8], fill=LIGHT, width=2)
     days = list(range(1, min(5, len(daily["time"]))))
-    cw = (W - 60) / max(1, len(days))
+    cw = width / max(1, len(days))
     for n, i in enumerate(days):
-        cx = 30 + cw * n + cw / 2
+        cx = x0 + cw * n + cw / 2
         day = datetime.fromisoformat(daily["time"][i])
-        text(d, (cx - 78, y2 + 8), GIORNI[day.weekday()], font(24, True))
-        icon(d, wmo(daily["weather_code"][i])[0], cx + 58, y2 + 26, 36)
-        text(d, (cx - 78, y2 + 44),
-             f"{round(daily['temperature_2m_min'][i])}° / {round(daily['temperature_2m_max'][i])}°", font(21), DARK)
-    y3 = y2 + 85
+        text(d, (cx, y2 + 4), GIORNI[day.weekday()], font(23, True), anchor="ma")
+        icon(d, wmo(daily["weather_code"][i])[0], cx, y2 + 62, 38)
+        text(d, (cx, y2 + 92),
+             f"{round(daily['temperature_2m_min'][i])}° / {round(daily['temperature_2m_max'][i])}°", font(20), DARK, "ma")
+    y3 = y2 + 128
     air = w.get("_air")
     if air and air.get("european_aqi") is not None:
-        d.line([30, y3, W - 30, y3], fill=LIGHT, width=2)
-        text(d, (30, y3 + 12), "ARIA", font(20, True), DARK)
+        d.line([x0, y3, x1, y3], fill=LIGHT, width=2)
+        text(d, (x0, y3 + 12), "ARIA", font(19, True), DARK)
         lab = f"{aqi_label(air['european_aqi'])} ({round(air['european_aqi'])})"
-        text(d, (100, y3 + 9), lab, font(24, True))
+        text(d, (x0 + 66, y3 + 9), lab, font(23, True))
         det = "  ".join(f"{n} {round(air[k])}" for n, k in (("PM2.5", "pm2_5"), ("PM10", "pm10"), ("NO₂", "nitrogen_dioxide"))
                         if air.get(k) is not None) + " µg/m³"
-        text(d, (W - 30, y3 + 13), det, font(19), DARK, "ra")
-        y3 += 48
+        text(d, (x0, y3 + 44), det, font(18), DARK)
+        y3 += 74
     return y3
 
 
-def draw_solar(d, s, y0):
-    text(d, (30, y0), "FOTOVOLTAICO", font(22, True), DARK)
+def draw_solar(d, s, x0, x1, y0, ybot):
+    """Riepilogo fotovoltaico nella colonna destra (x0..x1)."""
+    text(d, (x0, y0), "FOTOVOLTAICO", font(21, True), DARK)
     if s is None:
-        text(d, (W / 2, y0 + 150), "Dati impianto non disponibili", font(26), MID, "ma")
+        text(d, ((x0 + x1) / 2, y0 + 150), "Dati impianto non disponibili", font(23), MID, "ma")
         return
     k = s["realKpi"]
-    text(d, (30, y0 + 38), num(float(k["realTimePower"]), 2), font(92, True))
-    wv = d.textlength(num(float(k["realTimePower"]), 2), font=font(92, True))
-    text(d, (42 + wv, y0 + 92), "kW", font(34, True), DARK)
-    text(d, (32, y0 + 142), "produzione attuale", font(20), DARK)
+    p = num(float(k["realTimePower"]), 2)
+    text(d, (x0, y0 + 30), p, font(80, True))
+    wv = d.textlength(p, font=font(80, True))
+    text(d, (x0 + 10 + wv, y0 + 78), "kW", font(30, True), DARK)
+    text(d, (x0 + 2, y0 + 122), "produzione attuale", font(19), DARK)
 
     cells = [("Oggi", k["dailyEnergy"]), ("Mese", k["monthEnergy"]),
              ("Anno", k["yearEnergy"]), ("Totale", k["cumulativeEnergy"])]
-    gx, gy, cw, ch = 400, y0 + 36, 165, 66
+    cw, ch = (x1 - x0) / 2, 64
+    gy = y0 + 160
     for i, (lab, val) in enumerate(cells):
-        x, y = gx + (i % 2) * cw, gy + (i // 2) * ch
+        x, y = x0 + (i % 2) * cw, gy + (i // 2) * ch
         v, u = energy(float(val))
-        text(d, (x, y), lab, font(19), DARK)
-        text(d, (x, y + 22), v, font(30, True))
-        text(d, (x + d.textlength(v, font=font(30, True)) + 6, y + 31), u, font(18), DARK)
+        text(d, (x, y), lab, font(18), DARK)
+        text(d, (x, y + 20), v, font(28, True))
+        text(d, (x + d.textlength(v, font=font(28, True)) + 6, y + 28), u, font(17), DARK)
 
     # curva di potenza di oggi
     pc = s.get("powerCurve") or {}
@@ -410,46 +422,46 @@ def draw_solar(d, s, y0):
             vals.append(float(v))
         except (TypeError, ValueError):
             vals.append(None)
-    x0, x1, yb, yt = 70, W - 30, H - 62, y0 + 204
-    d.line([x0, yb, x1, yb], fill=BLACK, width=2)
+    cx0, cx1, yb, yt = x0 + 40, x1, ybot - 28, gy + 2 * ch + 40
+    d.line([cx0, yb, cx1, yb], fill=BLACK, width=2)
     peak = max([v for v in vals if v is not None] or [0])
     top = max(1.0, math.ceil(peak))
     for frac in (0.5, 1.0):
         y = yb - (yb - yt) * frac
-        d.line([x0, y, x1, y], fill=LIGHT, width=1)
-        text(d, (x0 - 8, y), num(top * frac, 1), font(17), DARK, "rm")
-    text(d, (x0 - 8, yt - 22), "kW", font(17), DARK, "rm")
+        d.line([cx0, y, cx1, y], fill=LIGHT, width=1)
+        text(d, (cx0 - 6, y), num(top * frac, 1), font(16), DARK, "rm")
+    text(d, (cx0 - 6, yt - 18), "kW", font(16), DARK, "rm")
     n = len(vals) or 288
     for hh in (0, 6, 12, 18, 24):
-        x = x0 + (x1 - x0) * hh / 24
+        x = cx0 + (cx1 - cx0) * hh / 24
         d.line([x, yb, x, yb + 6], fill=BLACK, width=2)
-        text(d, (x, yb + 10), f"{hh:02d}", font(17), DARK, "ma")
-    pts = [(x0 + (x1 - x0) * i / (n - 1), yb - (yb - yt) * min(v, top) / top)
+        text(d, (x, yb + 9), f"{hh:02d}", font(16), DARK, "ma")
+    pts = [(cx0 + (cx1 - cx0) * i / (n - 1), yb - (yb - yt) * min(v, top) / top)
            for i, v in enumerate(vals) if v is not None]
     if len(pts) > 1:
         d.polygon([(pts[0][0], yb)] + pts + [(pts[-1][0], yb)], fill=LIGHT)
         d.line(pts, fill=BLACK, width=3)
-    text(d, (x1, yt - 22), f"picco {num(peak, 2)} kW", font(18), DARK, "ra")
+    text(d, (cx1, yt - 18), f"picco {num(peak, 2)} kW", font(17), DARK, "ra")
 
 
 def render(weather, solar, place, now, errors):
-    img = Image.new("L", (W, H), WHITE)
+    img = Image.new("L", (LW, LH), WHITE)
     d = ImageDraw.Draw(img)
-    text(d, (30, 22), f"{GIORNI_L[now.weekday()]} {now.day} {MESI[now.month - 1]}", font(34, True))
-    text(d, (W - 30, 28), place, font(26), DARK, "ra")
-    d.line([30, 76, W - 30, 76], fill=BLACK, width=3)
+    text(d, (30, 18), f"{GIORNI_L[now.weekday()]} {now.day} {MESI[now.month - 1]}", font(34, True))
+    text(d, (LW - 30, 24), place, font(26), DARK, "ra")
+    d.line([30, 66, LW - 30, 66], fill=BLACK, width=3)
+    split = 610
+    d.line([split, 82, split, LH - 40], fill=LIGHT, width=2)
     if weather:
-        y = draw_weather(d, weather, 90, now)
+        draw_weather(d, weather, 30, split - 22, 90, now)
     else:
-        text(d, (W / 2, 280), "Meteo non disponibile", font(26), MID, "ma")
-        y = 575
-    d.line([30, y, W - 30, y], fill=BLACK, width=3)
-    draw_solar(d, solar, y + 16)
+        text(d, (320, 300), "Meteo non disponibile", font(26), MID, "ma")
+    draw_solar(d, solar, split + 24, LW - 30, 82, LH - 40)
     foot = f"Aggiornato alle {now.strftime('%H:%M')}"
     if errors:
         foot += "  ·  " + ", ".join(errors)
-    text(d, (W / 2, H - 14), foot, font(16), MID, "ms")
-    return img
+    text(d, (LW / 2, LH - 8), foot, font(16), MID, "ms")
+    return to_portrait(img)
 
 
 # ---------------------------------------------------------------- fotovoltaico (schermata dedicata)
@@ -516,17 +528,17 @@ def intit(n):
 
 
 def draw_pv(s, hist, now, errors):
-    """Schermata fotovoltaico, verticale 758x1024."""
-    img = Image.new("L", (W, H), WHITE)
+    """Schermata fotovoltaico in orizzontale (1024x758), poi ruotata come i titoli."""
+    img = Image.new("L", (LW, LH), WHITE)
     d = ImageDraw.Draw(img)
-    text(d, (30, 20), "Fotovoltaico", font(34, True))
-    text(d, (W - 30, 28), f"{GIORNI[now.weekday()]} {now.day} {MESI[now.month - 1][:3]}", font(26), DARK, "ra")
-    d.line([30, 76, W - 30, 76], fill=BLACK, width=3)
+    text(d, (30, 18), "Fotovoltaico", font(34, True))
+    text(d, (LW - 30, 24), f"{GIORNI[now.weekday()]} {now.day} {MESI[now.month - 1][:3]}", font(26), DARK, "ra")
+    d.line([30, 66, LW - 30, 66], fill=BLACK, width=3)
     foot = f"Aggiornato alle {now.strftime('%H:%M')}" + ("  ·  " + ", ".join(errors) if errors else "")
-    text(d, (W / 2, H - 14), foot, font(16), MID, "ms")
+    text(d, (LW / 2, LH - 8), foot, font(16), MID, "ms")
     if s is None:
-        text(d, (W / 2, 420), "Dati impianto non disponibili", font(26), MID, "ma")
-        return img
+        text(d, (LW / 2, 340), "Dati impianto non disponibili", font(26), MID, "ma")
+        return to_portrait(img)
     k = s["realKpi"]
     power, daily = float(k["realTimePower"]), float(k["dailyEnergy"])
     vals = curve_of(s)
@@ -535,41 +547,44 @@ def draw_pv(s, hist, now, errors):
     yday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     days = hist.get("days", {})
     yd = days.get(yday)
+    L0, L1 = 30, 520       # colonna sinistra
+    R0, R1 = 566, LW - 30  # colonna destra
+    d.line([543, 80, 543, LH - 30], fill=LIGHT, width=2)
 
     # --- adesso / oggi / picco
-    text(d, (30, 90), num(power, 2), font(88, True))
-    wv = d.textlength(num(power, 2), font=font(88, True))
-    text(d, (42 + wv, 146), "kW", font(32, True), DARK)
-    text(d, (32, 192), "produzione attuale", font(20), DARK)
-    text(d, (420, 92), "OGGI", font(18, True), DARK)
-    text(d, (420, 112), num(daily, 1), font(40, True))
-    text(d, (420 + d.textlength(num(daily, 1), font=font(40, True)) + 8, 130), "kWh", font(20), DARK)
+    ps = num(power, 2)
+    text(d, (L0, 72), ps, font(76, True))
+    wv = d.textlength(ps, font=font(76, True))
+    text(d, (L0 + 10 + wv, 122), "kW", font(28, True), DARK)
+    text(d, (L0 + 2, 166), "produzione attuale", font(19), DARK)
+    xo = 300
+    text(d, (xo, 76), "OGGI", font(17, True), DARK)
+    text(d, (xo, 96), num(daily, 1), font(36, True))
+    text(d, (xo + d.textlength(num(daily, 1), font=font(36, True)) + 6, 112), "kWh", font(18), DARK)
     if yd:
-        text(d, (W - 30, 126), f"ieri {num(yd['kwh'], 1)}", font(20), DARK, "ra")
-    text(d, (420, 162), "PICCO", font(18, True), DARK)
-    pt = ""
+        text(d, (L1, 112), f"ieri {num(yd['kwh'], 1)}", font(17), DARK, "ra")
+    text(d, (xo, 138), "PICCO", font(17, True), DARK)
+    text(d, (xo, 158), f"{num(peak, 2)} kW", font(26, True))
     if peak > 0:
         i = next(i for i, v in enumerate(vals) if v == peak)
-        pt = f"alle {i * 5 // 60:02d}:{i * 5 % 60:02d}"
-    text(d, (420, 180), f"{num(peak, 2)} kW", font(30, True))
-    text(d, (W - 30, 190), pt, font(20), DARK, "ra")
+        text(d, (xo + 118, 168), f"alle {i * 5 // 60:02d}:{i * 5 % 60:02d}", font(17), DARK)
 
     # --- andamento di oggi (con la curva di ieri come riferimento)
-    d.line([30, 226, W - 30, 226], fill=LIGHT, width=2)
-    text(d, (30, 236), "ANDAMENTO DI OGGI", font(18, True), DARK)
+    d.line([L0, 200, L1, 200], fill=LIGHT, width=2)
+    text(d, (L0, 210), "ANDAMENTO DI OGGI", font(17, True), DARK)
     ycurve = hist.get("curves", {}).get(yday)
-    x0, x1, yt, yb = 70, W - 30, 292, 494
+    x0, x1, yt, yb = L0 + 40, L1, 262, 392
     top = max(1.0, math.ceil(max([peak] + [v for v in (ycurve or []) if v is not None])))
     d.line([x0, yb, x1, yb], fill=BLACK, width=2)
     for frac in (0.5, 1.0):
         y = yb - (yb - yt) * frac
         d.line([x0, y, x1, y], fill=LIGHT, width=1)
-        text(d, (x0 - 8, y), num(top * frac, 1), font(17), DARK, "rm")
-    text(d, (x0 - 8, yt - 16), "kW", font(17), DARK, "rm")
+        text(d, (x0 - 6, y), num(top * frac, 1), font(16), DARK, "rm")
+    text(d, (x0 - 6, yt - 14), "kW", font(16), DARK, "rm")
     for hh in (0, 6, 12, 18, 24):
         x = x0 + (x1 - x0) * hh / 24
         d.line([x, yb, x, yb + 6], fill=BLACK, width=2)
-        text(d, (x, yb + 9), f"{hh:02d}", font(17), DARK, "ma")
+        text(d, (x, yb + 9), f"{hh:02d}", font(16), DARK, "ma")
 
     def pts_of(v):
         n = len(v) or 288
@@ -580,15 +595,15 @@ def draw_pv(s, hist, now, errors):
         yp = pts_of(ycurve)
         if len(yp) > 1:
             d.line(yp, fill=MID, width=2)
-        text(d, (W - 30, 238), "— oggi    ·· ieri", font(16), DARK, "ra")
+        text(d, (L1, 212), "— oggi    ·· ieri", font(15), DARK, "ra")
     tp = pts_of(vals)
     if len(tp) > 1:
         d.polygon([(tp[0][0], yb)] + tp + [(tp[-1][0], yb)], fill=LIGHT)
         d.line(tp, fill=BLACK, width=3)
 
     # --- ultimi 14 giorni
-    d.line([30, 524, W - 30, 524], fill=LIGHT, width=2)
-    text(d, (30, 534), "ULTIMI 14 GIORNI (kWh)", font(18, True), DARK)
+    d.line([L0, 432, L1, 432], fill=LIGHT, width=2)
+    text(d, (L0, 442), "ULTIMI 14 GIORNI (kWh)", font(17, True), DARK)
     seq = [(now - timedelta(days=13 - i)) for i in range(14)]
     series = []
     for dt in seq:
@@ -596,29 +611,23 @@ def draw_pv(s, hist, now, errors):
         v = daily if key == today else (days.get(key) or {}).get("kwh")
         series.append((dt, v))
     known = [v for _, v in series if v is not None]
-    cx0, cx1, cyt, cyb = 40, W - 30, 580, 722
+    cx0, cx1, cyt, cyb = L0 + 4, L1, 500, 690
     d.line([cx0, cyb, cx1, cyb], fill=BLACK, width=2)
-    month_days = {kk: vv["kwh"] for kk, vv in days.items() if kk.startswith(now.strftime("%Y-%m"))}
-    month_days[today] = max(daily, month_days.get(today, 0))
-    bk = max(month_days, key=month_days.get)
-    if month_days[bk] > 0:
-        text(d, (W - 30, 536), f"migliore del mese: {bk[8:10]}/{bk[5:7]} · {num(month_days[bk], 1)}", font(18), DARK, "ra")
     if len(known) < 2:
         text(d, ((cx0 + cx1) / 2, (cyt + cyb) / 2), "storico in raccolta da oggi", font(20), MID, "mm")
     cmax = max(known + [1.0])
     slot = (cx1 - cx0) / 14
     for i, (dt, v) in enumerate(series):
         cx = cx0 + slot * i + slot / 2
-        text(d, (cx, cyb + 6), str(dt.day), font(15, dt.strftime("%Y-%m-%d") == today), DARK, "ma")
+        text(d, (cx, cyb + 6), str(dt.day), font(14, dt.strftime("%Y-%m-%d") == today), DARK, "ma")
         if v is None:
             continue
         hgt = max((cyb - cyt) * v / cmax, 2)  # almeno 2 px, anche con produzione zero
         is_today = dt.strftime("%Y-%m-%d") == today
         d.rectangle([cx - slot * 0.3, cyb - hgt, cx + slot * 0.3, cyb - 1], fill=BLACK if is_today else MID)
-        text(d, (cx, cyb - hgt - 3), num(v, 0 if v >= 100 else 1), font(14), DARK, "ms")
+        text(d, (cx, cyb - hgt - 3), num(v, 0 if v >= 100 else 1), font(13), DARK, "ms")
 
-    # --- mese / anno / totale
-    d.line([30, 758, W - 30, 758], fill=LIGHT, width=2)
+    # --- mese / anno / totale (colonna destra)
     months, years = hist.get("months", {}), hist.get("years", {})
     prev_month = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
     mval, yval = float(k["monthEnergy"]), float(k["yearEnergy"])
@@ -630,32 +639,48 @@ def draw_pv(s, hist, now, errors):
           if str(now.year - 1) in years else "")),
         ("TOTALE", energy(float(k["cumulativeEnergy"])), "dall'installazione", ""),
     ]
-    cw = (W - 60) / 3
     for i, (lab, (v, u), sub1, sub2) in enumerate(cells):
-        x = 30 + cw * i
-        text(d, (x, 770), lab, font(18, True), DARK)
-        text(d, (x, 792), v, font(36, True))
-        text(d, (x + d.textlength(v, font=font(36, True)) + 6, 808), u, font(18), DARK)
-        text(d, (x, 840), sub1, font(16), DARK)
+        y = 80 + i * 112
+        if i:
+            d.line([R0, y - 8, R1, y - 8], fill=LIGHT, width=2)
+        text(d, (R0, y), lab, font(17, True), DARK)
+        text(d, (R0, y + 22), v, font(40, True))
+        vw = d.textlength(v, font=font(40, True))
+        text(d, (R0 + vw + 8, y + 40), u, font(19), DARK)
+        text(d, (R0, y + 74), sub1, font(16), DARK)
         if sub2:
-            text(d, (x, 862), sub2, font(16), DARK)
+            text(d, (R1, y + 74), sub2, font(16), DARK, "ra")
+
+    # --- migliore del mese
+    month_days = {kk: vv["kwh"] for kk, vv in days.items() if kk.startswith(now.strftime("%Y-%m"))}
+    month_days[today] = max(daily, month_days.get(today, 0))
+    bk = max(month_days, key=month_days.get)
+    y = 80 + 3 * 112
+    d.line([R0, y - 8, R1, y - 8], fill=LIGHT, width=2)
+    if month_days[bk] > 0:
+        text(d, (R0, y), "GIORNO MIGLIORE DEL MESE", font(17, True), DARK)
+        text(d, (R0, y + 22), f"{bk[8:10]}/{bk[5:7]}", font(34, True))
+        bw = d.textlength(f"{bk[8:10]}/{bk[5:7]}", font=font(34, True))
+        text(d, (R0 + bw + 14, y + 32), f"{num(month_days[bk], 1)} kWh", font(24, True), DARK)
 
     # --- ambiente (da inizio impianto)
     sc = s.get("socialContribution") or {}
     if sc.get("co2Reduction") is not None:
-        d.line([30, 890, W - 30, 890], fill=LIGHT, width=2)
-        text(d, (30, 898), "DA INIZIO IMPIANTO", font(18, True), DARK)
+        y = 80 + 3 * 112 + 90
+        d.line([R0, y - 8, R1, y - 8], fill=LIGHT, width=2)
+        text(d, (R0, y), "DA INIZIO IMPIANTO", font(17, True), DARK)
         cum = max(float(k["cumulativeEnergy"]), 1.0)
         co2, coal = float(sc["co2Reduction"]), float(sc.get("standardCoalSavings") or 0)
         if co2 / cum < 0.01:  # il Kiosk li da' in tonnellate
             co2, coal = co2 * 1000, coal * 1000
         items = [("CO₂ evitata", f"{intit(co2)} kg"), ("alberi equivalenti", intit(float(sc.get("equivalentTreePlanting") or 0))),
                  ("carbone risparmiato", f"{intit(coal)} kg")]
+        cw = (R1 - R0) / 3
         for i, (lab, val) in enumerate(items):
-            x = 30 + cw * i
-            text(d, (x, 924), val, font(28, True))
-            text(d, (x, 960), lab, font(16), DARK)
-    return img
+            x = R0 + cw * i
+            text(d, (x, y + 24), val, font(24, True))
+            text(d, (x, y + 56), lab, font(14), DARK)
+    return to_portrait(img)
 
 
 def main():
