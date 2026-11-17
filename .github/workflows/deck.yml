@@ -2,7 +2,10 @@ name: Aggiorna deck
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # GitHub salta spesso le esecuzioni programmate ai minuti "tondi": si usano minuti meno affollati.
+    # In piu', ogni esecuzione ne riavvia una nuova a fine lavoro (ultimo passo), cosi' il ritmo
+    # di 15 minuti non dipende solo dalla pianificazione.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -11,6 +14,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: write
 
 concurrency:
   group: pages
@@ -19,6 +23,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment:
       name: github-pages
     steps:
@@ -41,3 +46,10 @@ jobs:
         with:
           path: public
       - uses: actions/deploy-pages@v4
+      - name: Prossimo aggiornamento tra circa 14 minuti
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sleep 840
+          gh workflow run deck.yml --ref main --repo "${{ github.repository }}"
